@@ -4,7 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated, SAFE_METHODS, BasePermission
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -16,6 +16,13 @@ from apps.tables.models import Table
 from apps.orders.models import Order, OrderRound, OrderItem
 from apps.billing.models import Bill
 from apps.payments.models import Payment
+
+
+class IsAdminOrReadOnly(BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and (
+            request.method in SAFE_METHODS or request.user.role == User.Role.ADMIN
+        ))
 
 
 class BusinessSerializer(serializers.ModelSerializer):
@@ -48,9 +55,10 @@ class CategorySerializer(serializers.ModelSerializer):
 
 
 class MenuItemSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source='category.name', read_only=True)
     class Meta:
         model = MenuItem
-        fields = '__all__'
+        fields = '__all__' + ''
         read_only_fields = ('business',)
 
 
@@ -81,16 +89,19 @@ class OrderSerializer(serializers.ModelSerializer):
     rounds = OrderRoundSerializer(many=True, read_only=True)
     items = OrderItemSerializer(many=True, read_only=True)
     table_number = serializers.IntegerField(source='table.number', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
     class Meta:
         model = Order
-        fields = ('id', 'table', 'table_number', 'status', 'notes', 'opened_at', 'closed_at', 'created_at', 'updated_at', 'rounds', 'items')
+        fields = ('id', 'table', 'table_number', 'status', 'notes', 'opened_at', 'closed_at', 'created_at', 'updated_at', 'created_by_name', 'rounds', 'items')
         read_only_fields = ('business', 'created_by', 'status', 'opened_at', 'closed_at')
 
 
 class BillSerializer(serializers.ModelSerializer):
+    table_number = serializers.IntegerField(source='order.table.number', read_only=True)
+    order_status = serializers.CharField(source='order.status', read_only=True)
     class Meta:
         model = Bill
-        fields = '__all__'
+        fields = '__all__' + ''
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -100,7 +111,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class TenantViewSet(viewsets.ModelViewSet):
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAdminOrReadOnly,)
     business_field = 'business'
 
     def get_queryset(self):
@@ -131,7 +142,7 @@ class TableViewSet(TenantViewSet):
 class BusinessViewSet(viewsets.ModelViewSet):
     queryset = Business.objects.all()
     serializer_class = BusinessSerializer
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (IsAdminOrReadOnly,)
 
     def get_queryset(self):
         return self.queryset.filter(id=self.request.user.business_id) if self.request.user.business_id else self.queryset.none()
@@ -145,9 +156,12 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(business_id=self.request.user.business_id)
 
+    def _admin_only(self, request):
+        return request.user.role == User.Role.ADMIN
+
     def create(self, request, *args, **kwargs):
-        if request.user.role != User.Role.ADMIN:
-            return Response({'detail': 'Only admins can create users.'}, status=status.HTTP_403_FORBIDDEN)
+        if not self._admin_only(request):
+            return Response({'detail': 'Only admins can manage users.'}, status=status.HTTP_403_FORBIDDEN)
         data = request.data.copy()
         password = data.pop('password', None)
         if not password:
@@ -158,6 +172,21 @@ class UserViewSet(viewsets.ModelViewSet):
         user.set_password(password)
         user.save(update_fields=['password'])
         return Response(self.get_serializer(user).data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        if not self._admin_only(request):
+            return Response({'detail': 'Only admins can manage users.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if not self._admin_only(request):
+            return Response({'detail': 'Only admins can manage users.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if not self._admin_only(request):
+            return Response({'detail': 'Only admins can manage users.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().destroy(request, *args, **kwargs)
 
 
 class OrderViewSet(viewsets.ModelViewSet):
@@ -245,23 +274,27 @@ class PaymentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return self.queryset.filter(bill__order__business_id=self.request.user.business_id)
 
-    @transaction.atomic
     def create(self, request, *args, **kwargs):
-        bill = Bill.objects.filter(id=request.data.get('bill'), order__business_id=request.user.business_id).first()
-        if not bill:
-            return Response({'detail': 'Bill not found.'}, status=status.HTTP_404_NOT_FOUND)
-        amount = Decimal(str(request.data.get('amount', bill.total)))
-        if amount != bill.total:
-            return Response({'detail': 'Payment amount must equal bill total.'}, status=status.HTTP_400_BAD_REQUEST)
-        payment = Payment.objects.create(bill=bill, amount=amount, method=request.data.get('method'), status=Payment.Status.COMPLETED, reference=request.data.get('reference', ''), paid_at=timezone.now())
-        bill.status = Bill.Status.PAID
-        bill.save(update_fields=['status', 'updated_at'])
-        order = bill.order
-        order.status, order.closed_at = Order.Status.COMPLETED, timezone.now()
-        order.save(update_fields=['status', 'closed_at', 'updated_at'])
-        order.table.status = Table.Status.AVAILABLE
-        order.table.save(update_fields=['status'])
-        return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
+        if request.user.role != User.Role.ADMIN:
+            return Response({'detail': 'Only admins can complete payments.'}, status=status.HTTP_403_FORBIDDEN)
+        with transaction.atomic():
+            bill = Bill.objects.filter(id=request.data.get('bill'), order__business_id=request.user.business_id).first()
+            if not bill:
+                return Response({'detail': 'Bill not found.'}, status=status.HTTP_404_NOT_FOUND)
+            amount = Decimal(str(request.data.get('amount', bill.total)))
+            if amount != bill.total:
+                return Response({'detail': 'Payment amount must equal bill total.'}, status=status.HTTP_400_BAD_REQUEST)
+            if bill.status == Bill.Status.PAID:
+                return Response({'detail': 'Bill is already paid.'}, status=status.HTTP_400_BAD_REQUEST)
+            payment = Payment.objects.create(bill=bill, amount=amount, method=request.data.get('method'), status=Payment.Status.COMPLETED, reference=request.data.get('reference', ''), paid_at=timezone.now())
+            bill.status = Bill.Status.PAID
+            bill.save(update_fields=['status', 'updated_at'])
+            order = bill.order
+            order.status, order.closed_at = Order.Status.COMPLETED, timezone.now()
+            order.save(update_fields=['status', 'closed_at', 'updated_at'])
+            order.table.status = Table.Status.AVAILABLE
+            order.table.save(update_fields=['status'])
+            return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
