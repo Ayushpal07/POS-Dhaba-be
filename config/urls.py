@@ -1,6 +1,25 @@
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from config.api import (
+    BusinessViewSet, UserViewSet, CategoryViewSet, MenuItemViewSet,
+    TableViewSet, OrderViewSet, BillViewSet, PaymentViewSet, login, me,
+)
+
+router = DefaultRouter()
+router.register('businesses', BusinessViewSet, basename='business')
+router.register('users', UserViewSet, basename='user')
+router.register('categories', CategoryViewSet, basename='category')
+router.register('menu-items', MenuItemViewSet, basename='menu-item')
+router.register('tables', TableViewSet, basename='table')
+router.register('orders', OrderViewSet, basename='order')
+router.register('bills', BillViewSet, basename='bill')
+router.register('payments', PaymentViewSet, basename='payment')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/auth/login/', login, name='login'),
+    path('api/auth/me/', me, name='me'),
+    path('api/', include(router.urls)),
 ]
