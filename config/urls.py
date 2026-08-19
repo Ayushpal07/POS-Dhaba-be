@@ -6,6 +6,7 @@ from config.api import (
     BusinessViewSet, UserViewSet, CategoryViewSet, MenuItemViewSet,
     TableViewSet, OrderViewSet, BillViewSet, PaymentViewSet, login, me,
 )
+from apps.orders.status import update_order_status
 
 router = DefaultRouter()
 router.register('businesses', BusinessViewSet, basename='business')
@@ -21,5 +22,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/login/', login, name='login'),
     path('api/auth/me/', me, name='me'),
+    path('api/orders/<int:pk>/status/', update_order_status, name='order-status'),
     path('api/', include(router.urls)),
 ]
