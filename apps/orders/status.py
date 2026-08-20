@@ -44,10 +44,8 @@ def update_order_status(request, pk):
         order.closed_at = order.closed_at or timezone.now()
         order.table.status = Table.Status.AVAILABLE
 
-        # A cancelled order's bill must no longer remain ISSUED.
-        # Use the existing VOID bill status so no schema migration is required.
         if new_status == Order.Status.CANCELLED:
-            Bill.objects.filter(order=order).exclude(status=Bill.Status.PAID).update(status=Bill.Status.VOID)
+            Bill.objects.filter(order=order).exclude(status=Bill.Status.PAID).update(status=Bill.Status.CANCELLED)
 
     elif new_status == Order.Status.BILL_REQUESTED:
         order.table.status = Table.Status.BILL_REQUESTED
