@@ -263,7 +263,24 @@ class BillViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = (IsAuthenticated,)
 
     def get_queryset(self):
-        return self.queryset.filter(order__business_id=self.request.user.business_id)
+        qs = self.queryset.filter(order__business_id=self.request.user.business_id)
+        params = self.request.query_params
+        status_filter = params.get('status')
+        search = params.get('search', '').strip()
+        date_from = params.get('date_from')
+        date_to = params.get('date_to')
+
+        if status_filter and status_filter in {choice[0] for choice in Bill.Status.choices}:
+            qs = qs.filter(status=status_filter)
+        if search:
+            from django.db.models import Q
+            query = Q(id__icontains=search) | Q(order__id__icontains=search) | Q(order__table__number__icontains=search)
+            qs = qs.filter(query)
+        if date_from:
+            qs = qs.filter(issued_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(issued_at__date__lte=date_to)
+        return qs.order_by('-issued_at', '-id')
 
 
 class PaymentViewSet(viewsets.ModelViewSet):
@@ -286,6 +303,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 return Response({'detail': 'Payment amount must equal bill total.'}, status=status.HTTP_400_BAD_REQUEST)
             if bill.status == Bill.Status.PAID:
                 return Response({'detail': 'Bill is already paid.'}, status=status.HTTP_400_BAD_REQUEST)
+            if bill.status == Bill.Status.CANCELLED:
+                return Response({'detail': 'Cancelled bills cannot be paid.'}, status=status.HTTP_400_BAD_REQUEST)
             payment = Payment.objects.create(bill=bill, amount=amount, method=request.data.get('method'), status=Payment.Status.COMPLETED, reference=request.data.get('reference', ''), paid_at=timezone.now())
             bill.status = Bill.Status.PAID
             bill.save(update_fields=['status', 'updated_at'])
