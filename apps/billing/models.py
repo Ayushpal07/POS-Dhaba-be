@@ -6,7 +6,7 @@ class Bill(models.Model):
         DRAFT = 'DRAFT', 'Draft'
         ISSUED = 'ISSUED', 'Issued'
         PAID = 'PAID', 'Paid'
-        VOID = 'VOID', 'Void'
+        CANCELLED = 'CANCELLED', 'Cancelled'
 
     order = models.OneToOneField('orders.Order', on_delete=models.PROTECT, related_name='bill')
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
