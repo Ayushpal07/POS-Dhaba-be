@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from apps.accounts.models import User
+from apps.billing.models import Bill
 from apps.orders.models import Order
 from apps.tables.models import Table
 from config.api import OrderSerializer
@@ -42,6 +43,12 @@ def update_order_status(request, pk):
     if new_status in (Order.Status.COMPLETED, Order.Status.CANCELLED):
         order.closed_at = order.closed_at or timezone.now()
         order.table.status = Table.Status.AVAILABLE
+
+        # A cancelled order's bill must no longer remain ISSUED.
+        # Use the existing VOID bill status so no schema migration is required.
+        if new_status == Order.Status.CANCELLED:
+            Bill.objects.filter(order=order).exclude(status=Bill.Status.PAID).update(status=Bill.Status.VOID)
+
     elif new_status == Order.Status.BILL_REQUESTED:
         order.table.status = Table.Status.BILL_REQUESTED
     else:
