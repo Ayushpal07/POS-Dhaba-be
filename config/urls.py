@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
+from rest_framework_simplejwt.views import TokenRefreshView
 
 from config.api import (
     BusinessViewSet, UserViewSet, CategoryViewSet, MenuItemViewSet,
@@ -22,6 +23,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/login/', login, name='login'),
     path('api/auth/me/', me, name='me'),
+    path('api/auth/token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('api/orders/<int:pk>/status/', update_order_status, name='order-status'),
     path('api/', include(router.urls)),
 ]
